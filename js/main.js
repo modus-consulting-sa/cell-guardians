@@ -1,6 +1,6 @@
 // حُرّاس الخلية · Cell Guardians — game orchestration, rules, multiplayer protocol and UI.
 import * as THREE from 'three';
-import { createRenderer, createPipeline, timeU, Bursts, disposeTree, isMobile, std, glow } from './fx.js';
+import { createRenderer, createPipeline, timeU, Bursts, disposeTree, isMobile, std, glow, MAX_PR } from './fx.js';
 import { buildWorld, makeGate, makeClue, makeHazard, hazardPos, SPAWN, GATE } from './env.js';
 import { createExplorer, textSprite, disposeSprite } from './character.js';
 import { Input, Player } from './controller.js';
@@ -73,7 +73,7 @@ const journal = new Set(store.get('cg-journal', []));
 // ---------- renderer / scene ----------
 const renderer = createRenderer($('stage'));
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 900);
+const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.2, 900);
 const pipe = createPipeline(renderer, scene, camera);
 scene.fog = new THREE.Fog(0x000000, 30, 100);
 const hemi = new THREE.HemisphereLight(0xffffff, 0x222222, 1);
@@ -1198,7 +1198,18 @@ addEventListener('pagehide', () => net.destroy());
 // =================================================================
 let lastNet = performance.now();
 let lastWatch = 0;
-setInterval(() => {
+// Drive networking from a Web Worker clock: background tabs throttle normal timers hard,
+// which would make a minimised host look disconnected to everyone else.
+function startTicker(fn, ms) {
+  try {
+    const src = URL.createObjectURL(new Blob([`setInterval(() => postMessage(0), ${ms});`], { type: 'text/javascript' }));
+    const w = new Worker(src);
+    w.onmessage = fn;
+    return;
+  } catch {}
+  setInterval(fn, ms);
+}
+startTicker(() => {
   const now = performance.now();
   const dt = Math.min(1.5, (now - lastNet) / 1000);
   lastNet = now;
@@ -1216,7 +1227,7 @@ setInterval(() => {
     lastWatch = now;
     net.watchdog();
   }
-}, 1000 / NET_HZ);
+}, Math.round(1000 / NET_HZ));
 
 // =================================================================
 // MAIN LOOP
@@ -1238,10 +1249,28 @@ setInterval(() => {
   }
 }, 1000);
 
+// adaptive quality: if frames are slow, lower the render resolution step by step
+let quality = Math.min(MAX_PR, devicePixelRatio), perfAcc = 0, perfN = 0, perfWarm = 3;
+function adaptQuality(rawDt) {
+  if (document.hidden || rawDt > 0.25) return; // ignore tab switches / hitches
+  if (perfWarm > 0) return void (perfWarm -= rawDt);
+  perfAcc += rawDt;
+  perfN++;
+  if (perfAcc < 2) return;
+  const avg = perfAcc / perfN;
+  perfAcc = perfN = 0;
+  if (avg > 1 / 40 && quality > 1) {
+    quality = Math.max(1, quality - 0.25);
+    pipe.setPixelRatio(quality);
+  }
+}
+
 function frame(now) {
   lastFrameAt = performance.now();
   timer.update(now);
-  const dt = Math.min(0.05, timer.getDelta());
+  const rawDt = timer.getDelta();
+  adaptQuality(rawDt);
+  const dt = Math.min(0.05, rawDt);
   const t = timer.getElapsed();
   timeU.value = t;
 
@@ -1284,7 +1313,7 @@ function frame(now) {
       hazardPos(hz.spec, hzClock, hz.mesh.position);
       hz.mesh.rotation.y = t * 1.4;
       hz.mesh.rotation.x = t * 0.7;
-      if (W.env.hazardKind === 'radical') hz.mesh.scale.setScalar(1 + Math.sin(t * 18) * 0.08);
+      if (W.env.hazardKind === 'radical') hz.mesh.scale.setScalar(1 + Math.sin(t * 6) * 0.06);
       if (W.env.hazardKind === 'smog') {
         hz.mesh.rotation.x = 0;
         hz.mesh.lookAt(player.pos.x, hz.mesh.position.y, player.pos.z);

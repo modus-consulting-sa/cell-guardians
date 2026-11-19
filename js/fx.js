@@ -26,9 +26,11 @@ export function rng(seed = 1) {
 }
 
 // ---------- renderer + post ----------
+// Retina at full DPR with MSAA + HDR bloom is very heavy; cap it (quality drops further at runtime if needed).
+export const MAX_PR = isMobile ? 1.25 : 1.5;
 export function createRenderer(container) {
   const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(isMobile ? 1.5 : 2, devicePixelRatio));
+  renderer.setPixelRatio(Math.min(MAX_PR, devicePixelRatio));
   renderer.setSize(innerWidth, innerHeight);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.0;
@@ -70,7 +72,7 @@ export function createPipeline(renderer, scene, camera) {
   scene.environmentIntensity = 0.3;
 
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
-  const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: isMobile ? 2 : 4 });
+  const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: isMobile ? 0 : 2 });
   const composer = new EffectComposer(renderer, rt);
   composer.addPass(new RenderPass(scene, camera));
   const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.6, 0.45, 1.0);
@@ -91,7 +93,12 @@ export function createPipeline(renderer, scene, camera) {
   }
   addEventListener('resize', resize);
   resize();
-  return { composer, bloom, grade: grade.uniforms, resize };
+  function setPixelRatio(pr) {
+    renderer.setPixelRatio(pr);
+    composer.setPixelRatio(pr);
+    resize();
+  }
+  return { composer, bloom, grade: grade.uniforms, resize, setPixelRatio };
 }
 
 // ---------- procedural textures ----------
